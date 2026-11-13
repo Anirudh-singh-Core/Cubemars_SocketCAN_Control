@@ -1,10 +1,37 @@
+# GUI beta V2 — without Continuous API
+
+This branch adds the optional browser GUI. **The GUI does not expose continuous
+joint-target streaming** (`start_stream`, `stream_targets`, `end_stream`). It
+supports Enable/Monitor, discrete quintic Move & hold, Go Zero recovery, Set Zero,
+filters, shared-session CAN Test and diagnostics. The underlying controller library
+retains its existing streaming API for Python callers; no library functionality
+has been removed. The controller-only `main` branch remains unchanged.
+
+## Run this branch
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[test]'
+.venv/bin/python -B Motor_Controller_beta_V2.py
+```
+
+Open <http://127.0.0.1:8767>. Startup is disconnected and sends no motor commands.
+Use your platform's explicit CAN setup first; see [Pi 5 setup](docs/raspberry-pi-5.md).
+For remote access use `ssh -N -L 8767:127.0.0.1:8767 USER@DEVICE_IP` and open that
+localhost URL on your computer. No browser heartbeat is enabled: closing the
+page does not stop an active motor. Use STOP ALL before leaving.
+
+[GUI instructions](motor_controller_beta_v2/README.md)
+
+---
+
 # HandyCAN
 
 A small, hardware-only controller library for **CubeMars AK70-10 V2 KV100 in MIT
 mode**, using `python-can` and Linux SocketCAN at **1 Mbps**. This repository contains the controller library, CLI, offline tests and setup
-guides. A browser GUI is not required or included.
+guides. The controller library does not require the optional GUI supplied on this branch.
 
-No GUI, simulator runtime, automatic filter selection, shell startup hooks,
+The core has no GUI dependency, simulator runtime, automatic filter selection, shell startup hooks,
 background boot installation, implicit motor enable, or automatic reconnect.
 Importing the library sends nothing. `Session.open()` validates and opens CAN but
 sends nothing. Hardware activation always requires an explicit API call or
