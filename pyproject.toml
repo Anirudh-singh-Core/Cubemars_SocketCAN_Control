@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "handycan"
+version = "0.2.0"
+description = "Explicit-session python-can control for CubeMars AK70-10 V2 MIT motors"
+readme = "README.md"
+classifiers = ["Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3", "Development Status :: 4 - Beta"]
+requires-python = ">=3.10"
+dependencies = ["python-can>=4.6,<5"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+handycan = "handycan.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

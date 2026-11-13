@@ -1,0 +1,31 @@
+flowchart TB
+    APP(["Higher-level Python application / CLI"])
+    subgraph ROOT["can_controller/ — hardware-only library"]
+        SESSION["Session<br/>Exclusive operation modes and per-motor state"]
+        STREAM["JointTarget group streaming<br/>Latest pending sample + command watchdog"]
+        CONFIG["Motor configuration and limits"]
+        WORKER["One I/O worker<br/>Deadlines, receive, decode, validate, transmit"]
+        TRANSPORT["python-can Bus<br/>Persistent SocketCAN transport + channel lease"]
+        DIAG["CAN Test<br/>Baseline / enable / polling / disable phases"]
+        FILTER["Explicit filtered-feedback selection<br/>Independent state per motor"]
+        LOG["Bounded queue → asynchronous JSONL writer"]
+        HEALTH["Read-only interface health thread"]
+        PROTOCOL["Pure MIT codec and quintic profile"]
+    end
+    SETUP(["Explicit administrator setup<br/>No boot or shell hooks"])
+    CAN(["Linux can0 → mttcan → J17 → transceiver → motors"])
+    APP --> SESSION
+    APP --> STREAM
+    STREAM --> SESSION
+    CONFIG --> SESSION
+    SESSION --> WORKER
+    DIAG -->|"borrows existing session"| SESSION
+    WORKER --> TRANSPORT
+    WORKER --> PROTOCOL
+    TRANSPORT <--> CAN
+    WORKER --> FILTER
+    FILTER -.->|"fresh raw or filtered degrees"| APP
+    WORKER --> LOG
+    HEALTH --> SESSION
+    SETUP --> CAN
+    style ROOT fill:#fff3b0,stroke:#b8860b,stroke-width:3px

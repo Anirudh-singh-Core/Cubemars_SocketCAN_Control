@@ -1,0 +1,16 @@
+{
+  "channel": "can0",
+  "control_hz": 1000,
+  "motors": [
+    {
+      "motor_id": 1,
+      "reply_id": 1,
+      "joint_min": -360,
+      "joint_max": 360,
+      "speed_max": 180,
+      "torque_max": 1,
+      "kp_max": 20,
+      "kd_max": 5
+    }
+  ]
+}
