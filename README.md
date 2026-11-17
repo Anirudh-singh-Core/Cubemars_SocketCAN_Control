@@ -1,4 +1,4 @@
-# HandyCAN
+# MIT_SocketCAN
 
 A small, hardware-only controller library for **CubeMars AK70-10 V2 KV100 in MIT
 mode**, using `python-can` and Linux SocketCAN at **1 Mbps**. This repository contains the controller library, CLI, offline tests and setup
