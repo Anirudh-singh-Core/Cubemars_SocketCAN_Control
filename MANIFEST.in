@@ -7,3 +7,5 @@ recursive-include src *.md
 
 include Motor_Controller_beta_V2.py graph_logger.py
 recursive-include motor_controller_beta_v2 *.py *.md *.html
+
+include LICENSE CONTRIBUTING.md SECURITY.md SAFETY.md

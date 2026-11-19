@@ -7,6 +7,7 @@ name = "handycan"
 version = "0.2.0"
 description = "Asynchronous SocketCAN/python-can control for CubeMars AK V2 MIT motors"
 readme = "README.md"
+license = {file = "LICENSE"}
 classifiers = ["Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3", "Development Status :: 4 - Beta"]
 requires-python = ">=3.10"
 dependencies = ["python-can>=4.6,<5"]
