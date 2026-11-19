@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "handycan"
 version = "0.2.0"
-description = "Explicit-session python-can control for CubeMars AK70-10 V2 MIT motors"
+description = "Asynchronous SocketCAN/python-can control for CubeMars AK V2 MIT motors"
 readme = "README.md"
 classifiers = ["Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3", "Development Status :: 4 - Beta"]
 requires-python = ">=3.10"

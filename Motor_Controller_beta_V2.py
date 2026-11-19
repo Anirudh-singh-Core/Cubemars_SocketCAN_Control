@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Beta V2 browser GUI — without Continuous API controls.
+"""Beta V2 browser GUI using the new handycan/python-can controller.
 
-Launch with .venv/bin/python -B Motor_Controller_beta_V2.py
+From a GUI-branch checkout: .venv/bin/python -B Motor_Controller_beta_V2.py
 Starts disconnected, sends no motor commands. No simulation mode or boot setup.
 Local browser: http://127.0.0.1:8767. For remote access, forward port 8767 over SSH.
 Closing a browser tab does not stop an active motor; use STOP ALL before leaving.
@@ -17,7 +17,7 @@ def main():
         from motor_controller_beta_v2.app import Application
         from motor_controller_beta_v2.web import make_server
     except ModuleNotFoundError as exc:
-        raise SystemExit(f'{exc}. Use the installed .venv/bin/python interpreter.') from exc
+        raise SystemExit(f'{exc}. Use the virtual environment interpreter with handycan installed.') from exc
     app=Application();server=make_server(app,port=args.port)
     print(f'Beta V2: http://127.0.0.1:{server.server_port} — REAL HARDWARE, DISCONNECTED; no motor commands sent.',flush=True)
     try:server.serve_forever(poll_interval=.2)

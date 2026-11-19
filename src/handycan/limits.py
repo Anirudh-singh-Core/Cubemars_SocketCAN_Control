@@ -67,15 +67,21 @@ class MotorLimits:
     enforce_measured_position: bool = True
     position_period_rad: float | None = None
 
+    protocol_velocity_max: float = 50
+    protocol_torque_max: float = 25
+
     def __post_init__(self):
         if isinstance(self.motor_id, bool) or not isinstance(self.motor_id, int) or not 1 <= self.motor_id <= 255:
             raise MotorLimitError('motor_id must be an integer in 1..255')
         if not isinstance(self.channel, str) or not self.channel:
             raise MotorLimitError('channel must be a nonempty string')
+        for name in ('protocol_velocity_max','protocol_torque_max'):
+            _number(name,getattr(self,name))
+            if getattr(self,name)<=0:raise MotorLimitError(name+' must be positive')
         for name, low, high, floor, ceiling in (
             ('position', self.position_min_rad, self.position_max_rad, -12.5, 12.5),
-            ('velocity', self.velocity_min_rad_s, self.velocity_max_rad_s, -50, 50),
-            ('torque', self.torque_min_nm, self.torque_max_nm, -25, 25),
+            ('velocity', self.velocity_min_rad_s, self.velocity_max_rad_s, -self.protocol_velocity_max, self.protocol_velocity_max),
+            ('torque', self.torque_min_nm, self.torque_max_nm, -self.protocol_torque_max, self.protocol_torque_max),
         ):
             _number(name+'_min', low); _number(name+'_max', high)
             if not floor <= low <= high <= ceiling:

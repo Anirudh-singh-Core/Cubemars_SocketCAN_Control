@@ -1,11 +1,12 @@
 """Thin GUI adapter: all motor I/O uses handycan.Session; no SocketCAN access here."""
 from copy import deepcopy
+from dataclasses import asdict
 from pathlib import Path
 import json
 import threading
 import time
 import uuid
-from handycan import Motor, Session, can_test
+from handycan import Motor, Session, TimingPolicy, can_test
 from handycan.config import validate
 from handycan.interface import inspect_interface
 
@@ -34,6 +35,7 @@ class Application:
                     readings[i]=reading
                 except Exception:pass
         return dict(version='beta V2',backend='python-can / handycan',initialized=config is not None,
+                    timing_defaults=asdict(TimingPolicy()),
                     connected=bool(state and state['open']),config=config,session=state,
                     readings=readings,job=job,interface=interface)
 
@@ -57,8 +59,9 @@ class Application:
                 data=p['config'];channel=data.get('channel','can0');hz=data.get('control_hz',1000)
                 motors=tuple(Motor.from_degrees(channel=channel,**row) for row in data['motors'])
                 validate(motors,channel,hz)
+                timing=TimingPolicy(**data.get('timing',{}))
                 with self._guard:
-                    self.config=dict(channel=channel,control_hz=hz,motors=deepcopy(data['motors']))
+                    self.config=dict(channel=channel,control_hz=hz,motors=deepcopy(data['motors']),timing=asdict(timing))
                     self.motors=motors;self.job=None
                 return dict(initialized=True)
             if name=='connect':
@@ -66,7 +69,8 @@ class Application:
                 if self.session:raise RuntimeError('Already connected')
                 path=ROOT/'diagnostic_logs'/'beta_V2'/(time.strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:8]+'.jsonl')
                 session=self._factory(self.motors,channel=self.config['channel'],
-                                      control_hz=self.config['control_hz'],log_path=path)
+                                      control_hz=self.config['control_hz'],log_path=path,
+                                      timing=TimingPolicy(**self.config['timing']))
                 session.open()
                 with self._guard:self.session=session;self.job=None
                 return dict(connected=True,motor_commands_sent=False)
@@ -77,15 +81,15 @@ class Application:
                 return dict(connected=False)
             if not self.session:raise RuntimeError('Connect first')
             i=p.get('motor_id')
-            if isinstance(i,bool) or not isinstance(i,int) or i not in self.session.axes:raise ValueError('Select a configured motor ID')
             if name=='test':
-                if p.get('confirm') is not True:raise ValueError('Confirm active test: it enables, polls and disables')
+                if p.get('confirm') is not True:raise ValueError('Confirm all-motor test: it enables, polls and disables every configured motor')
                 if any(a['state']!='DISABLED' for a in self.session.snapshot()['axes'].values()):
                     raise RuntimeError('Disable all motors before CAN Test')
-                with self._guard:self.job=dict(state='RUNNING',motor_id=i,report=None,started=time.time())
-                self._job_thread=threading.Thread(target=self._run_test,args=(self.session,i),name='gui-can-test',daemon=True)
+                with self._guard:self.job=dict(state='RUNNING',motor_ids=list(self.session.axes),report=None,started=time.time())
+                self._job_thread=threading.Thread(target=self._run_test,args=(self.session,None),name='gui-can-test',daemon=True)
                 self._job_thread.start()
                 return dict(started=True)
+            if isinstance(i,bool) or not isinstance(i,int) or i not in self.session.axes:raise ValueError('Select a configured motor ID')
             if name=='enable':
                 if p.get('confirm') is not True:raise ValueError('Confirm motor activation')
                 return self.session.enable(i)

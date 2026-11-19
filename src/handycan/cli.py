@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 import time
-from .config import Motor
+from .config import Motor, TimingPolicy
 from .session import Session
 from .diagnostics import can_test
 from .interface import inspect_interface
@@ -12,7 +12,7 @@ from .interface import inspect_interface
 def load_config(path):
     data=json.loads(Path(path).read_text());channel=data.get('channel','can0')
     motors=[Motor.from_degrees(channel=channel,**row) for row in data['motors']]
-    return motors,channel,data.get('control_hz',1000)
+    return motors,channel,data.get('control_hz',1000),TimingPolicy(**data.get('timing',{}))
 
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
@@ -22,8 +22,9 @@ def main(argv=None):
     status.add_argument('-help',action='help');status.add_argument('--channel',default='can0')
     for name in ('test','monitor'):
         q=sub.add_parser(name,help='Bounded CAN test' if name=='test' else 'Enable neutral polling and print encoder')
-        q.add_argument('-help',action='help');q.add_argument('--config',required=True)
-        q.add_argument('--id',type=int,default=1)
+        q.add_argument('-help',action='help');q.add_argument('--config',required=True,
+            help='JSON motor limits, control_hz and optional timing policy (seconds); see README timing table')
+        q.add_argument('--id',type=int,default=None if name=='test' else 1,help='Test only this ID; test defaults to all configured IDs')
         q.add_argument('--active',action='store_true',help='Explicitly enable motor at zero gains; disable on exit')
         if name=='test':q.add_argument('--report',type=Path,default=Path('logs/can_test_latest.json'))
         else:q.add_argument('--seconds',type=float,default=10)
@@ -31,12 +32,12 @@ def main(argv=None):
     try:
         if args.action=='status':
             info=inspect_interface(args.channel);print(json.dumps(info,indent=2));return 0 if info['ready'] else 1
-        motors,channel,hz=load_config(args.config)
-        if args.id not in [m.limits.motor_id for m in motors]:raise ValueError('ID is not in configuration')
+        motors,channel,hz,timing=load_config(args.config)
+        if args.id is not None and args.id not in [m.limits.motor_id for m in motors]:raise ValueError('ID is not in configuration')
         if args.action=='monitor':
             if not args.active:raise ValueError('Monitoring requires --active; it enables the motor')
             if not 0<args.seconds<=3600:raise ValueError('seconds must be 0..3600')
-        with Session(motors,channel=channel,control_hz=hz) as session:
+        with Session(motors,channel=channel,control_hz=hz,timing=timing) as session:
             if args.action=='test':
                 report=can_test(session,args.id,active=args.active)
                 args.report.parent.mkdir(parents=True,exist_ok=True)

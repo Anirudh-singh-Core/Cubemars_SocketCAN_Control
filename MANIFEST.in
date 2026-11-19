@@ -1,8 +1,9 @@
-include README.md VALIDATION.md architecture.mmd
+include README.md VALIDATION.md architecture.mmd Recover_can
 recursive-include docs *.md
-recursive-include examples *.json
-recursive-include tools *.sh
-recursive-include tests *.py
+recursive-include examples *.json *.md
+recursive-include tools *.sh *.md
+recursive-include tests *.py *.md
+recursive-include src *.md
 
 include Motor_Controller_beta_V2.py graph_logger.py
-recursive-include motor_controller_beta_v2 *.py *.html *.md
+recursive-include motor_controller_beta_v2 *.py *.md *.html

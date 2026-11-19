@@ -8,7 +8,7 @@ import can
 import pytest
 from handycan import Motor, Session, can_test, OwnershipError, SessionFault, FeedbackError
 from handycan.protocol import POLL,ENABLE,DISABLE,SET_ZERO,encode_mit_command,decode
-from handycan.transport import ChannelLease,Transport
+from handycan.transport import ChannelLease,Transport,TxConfirmation
 from handycan.interface import inspect_interface
 
 
@@ -28,6 +28,7 @@ class ScriptedTransport:
     def send(self,i,payload):
         if payload==self.reject:raise can.CanOperationError('Injected send failure')
         self.sent.append((i,payload,threading.get_ident()))
+        self.incoming.put(TxConfirmation(i,payload,time.time()))
         if self.reply and payload not in (DISABLE,SET_ZERO):self.incoming.put(message(i,self.position))
     def receive(self,timeout):
         self.receive_threads.add(threading.get_ident())
@@ -86,20 +87,23 @@ def test_stale_feedback_stops_without_retry(session):
     session._transport.reply=False
     result=wait(session,lambda s:s['fault'] is not None)
     assert 'stale' in result['fault']
+    wait(session,lambda s:s['axes'][1]['state']=='DISABLED')
     assert session._transport.sent[-1][1]==DISABLE
     with pytest.raises(SessionFault):session.enable(1)
     with pytest.raises(SessionFault):session.get_encoder_feedback(1)
 
 def test_initial_no_reply_times_out(session):
-    session.enable(1)
+    with pytest.raises(SessionFault,match='initial'):session.enable(1)
     result=wait(session,lambda s:s['fault'] is not None)
     assert 'initial' in result['fault']
+    wait(session,lambda s:s['axes'][1]['state']=='DISABLED')
     assert session._transport.sent[-1][1]==DISABLE
 
 def test_enable_uncertain_delivery_attempts_disable(session):
     session._transport.reject=ENABLE
     with pytest.raises(can.CanError):session.enable(1)
     assert session.snapshot()['fault']
+    wait(session,lambda s:s['axes'][1]['state']=='DISABLED')
     assert session._transport.sent[-1][1]==DISABLE
 
 def test_driver_fault_and_bus_off(session):
@@ -122,15 +126,20 @@ def test_same_channel_lock(tmp_path):
     b.acquire();b.close()
 
 def test_transport_uses_python_can_and_releases_lease(tmp_path,monkeypatch):
+    monkeypatch.setattr(Transport,'_require_driver_echo',lambda _:None)
     monkeypatch.setattr('handycan.transport.Path.home',lambda:tmp_path)
     opened=[]
     class Bus:
+        class Socket:
+            def setsockopt(self,*a):pass
+            def setblocking(self,*a):pass
+        socket=Socket()
         def send(self,msg,timeout):opened.append((msg,timeout))
         def recv(self,timeout):return None
         def shutdown(self):opened.append('closed')
     def factory(**kw):
         assert kw['interface']=='socketcan' and kw['ignore_config'] is True
-        assert not kw['receive_own_messages'];return Bus()
+        assert kw['receive_own_messages'];return Bus()
     monkeypatch.setattr('handycan.transport.can.Bus',factory)
     t=Transport('can0');t.open();t.send(1,POLL);t.close()
     assert isinstance(opened[0][0],can.Message) and opened[0][1]==0 and opened[-1]=='closed'
@@ -168,10 +177,10 @@ def test_diagnostic_locates_error_phase(session):
         nonlocal calls
         calls+=1
         result=ready(channel)
-        result['counters']={'bus_error':4 if calls>=4 else 0}
+        result['counters']={'bus_error':4 if calls>=5 else 0}
         return result
     report=can_test(session,1,active=True,window=.08,_inspector=inspect)
-    assert report['result']=='FAIL' and report['communication_passed']
+    assert report['result']=='FAIL' and not report['communication_passed']
     assert report['phases'][1]['counter_delta']['bus_error']==4
     assert any(reason.startswith('enable: new') for reason in report['failure_reasons'])
 
@@ -231,10 +240,15 @@ def test_two_motors_share_worker_and_transport(tmp_path):
 
 def test_old_queued_feedback_is_not_accepted_after_enable(session):
     old=message();old.timestamp=time.time()-2
-    session.enable(1);session._transport.incoming.put(old)
+    errors=[]
+    def enable():
+        try:session.enable(1)
+        except SessionFault as exc:errors.append(exc)
+    thread=threading.Thread(target=enable);thread.start();session._transport.incoming.put(old)
     time.sleep(.03)
     assert session.snapshot()['axes'][1]['state']=='ENABLING'
     with pytest.raises(FeedbackError):session.get_encoder_feedback(1)
+    thread.join(2);assert errors
 
 def test_closed_session_cannot_be_reused(session):
     session.close()
@@ -280,6 +294,7 @@ def test_health_monitor_fault_invalidates_session(session):
     session._inspector=failed
     state=wait(session,lambda s:bool(s['fault']))
     assert 'BUS-OFF' in state['fault']
+    wait(session,lambda s:s['axes'][1]['state']=='DISABLED')
     assert session._transport.sent[-1][1]==DISABLE
 
 def test_adaptive_filter_uses_supplied_variance(session):
@@ -288,3 +303,69 @@ def test_adaptive_filter_uses_supplied_variance(session):
     wait(session,lambda _:session.axes[1]['filtered'] is not None)
     assert session.axes[1]['filter'].sigma==2
     assert session.get_encoder_feedback(1,source='adaptive_ema')['valid']
+
+
+def test_ak80_v2_wire_scaling_and_limits():
+    from dataclasses import replace
+    from handycan.config import validate
+    m=Motor.from_degrees(3,model='AK80-6-V2',joint_min=-90,joint_max=90,
+        speed_max=4000,torque_max=12,kp_max=50,kd_max=5)
+    validate([m],'can0',100)
+    assert encode_mit_command(0,0,0,0,0,model=m.model)==POLL
+    # Endpoint vector independent of the encoder implementation.
+    feedback=message(3);feedback.data=bytearray([3,0x7f,0xff,0xff,0xff,0xff,25,0])
+    fb=decode(feedback,3,3,'can0',1,model=m.model)
+    assert fb.measurement.velocity_rad_s==76
+    assert fb.measurement.torque_nm==12
+    payload=encode_mit_command(0,76,0,0,12,model=m.model)
+    assert payload.hex()=='7ffffff000000fff'
+    with pytest.raises(ValueError):encode_mit_command(0,0,0,0,12.1,model=m.model)
+    with pytest.raises(ValueError):replace(m,model='unknown')
+    with pytest.raises(ValueError):replace(m,limits=replace(m.limits,torque_max_nm=13))
+
+
+def test_mixed_model_session_decodes_per_axis(tmp_path):
+    from dataclasses import replace
+    ak80=replace(motor(2),model='AK80-6-V2',limits=replace(motor(2).limits,
+        protocol_velocity_max=76,protocol_torque_max=12))
+    with Session([motor(1),ak80],control_hz=100,log_path=tmp_path/'mixed.jsonl',
+                 _transport_factory=ScriptedTransport,_inspector=lambda _:None) as s:
+        s._transport.reply=True;s.enable(1);s.enable(2)
+        wait(s,lambda x:all(a['state']=='MONITORING' for a in x['axes'].values()))
+        a=s.get_encoder_feedback(1);b=s.get_encoder_feedback(2)
+        assert b['velocity_deg_s']==pytest.approx(a['velocity_deg_s']*76/50)
+        assert b['torque_nm']==pytest.approx(a['torque_nm']*12/25)
+        s.move(2,1,.05,kp=1,kd=0,ff_torque=1)
+        wait(s,lambda x:x['axes'][2]['state']=='HOLDING')
+        payload=next(p for i,p,_ in reversed(s._transport.sent) if i==2)
+        raw_torque=((payload[6]&15)<<8)|payload[7]
+        assert raw_torque==int(13*4095/24)  # +1 Nm in the AK80-6 wire range.
+
+
+@pytest.mark.parametrize('failure',[None,'missing','combined_errors'])
+def test_all_motor_diagnostic_checks_every_id_and_combined_traffic(tmp_path,failure):
+    class MultiTransport(ScriptedTransport):
+        def __init__(self,*a):super().__init__(*a);self.active=set();self.injected=False
+        def send(self,i,payload):
+            if payload==ENABLE:self.active.add(i)
+            if payload==DISABLE:self.active.discard(i)
+            self.reply=not(failure=='missing' and i==3)
+            super().send(i,payload)
+            if failure=='combined_errors' and len(self.active)>1 and not self.injected:
+                self.injected=True
+                self.incoming.put(can.Message(arbitration_id=0x88,is_error_frame=True,
+                    is_extended_id=False,timestamp=time.time(),data=[0,0,0x10,0,0,0,0,0]))
+    with Session([motor(1),motor(2),motor(3)],control_hz=100,log_path=tmp_path/'all.jsonl',
+                 _transport_factory=MultiTransport,_inspector=lambda _:None) as s:
+        t=s._transport
+        report=can_test(s,active=True,window=.08,_inspector=ready)
+        assert report['motor_ids']==[1,2,3]
+        assert report['result']==('PASS' if failure is None else 'FAIL'),report
+        assert s._transport is t and len(t.receive_threads)==1
+        assert not t.active
+        assert all(payload in (POLL,ENABLE,DISABLE) for _,payload,_ in t.sent)
+        if failure is None:
+            group=next(p for p in report['phases'] if p['name']=='combined/polling')
+            assert all(group['motors'][i]['feedback_frames']>=2 for i in (1,2,3))
+        if failure=='combined_errors':
+            assert any('combined/' in r for r in report['failure_reasons'])

@@ -15,5 +15,5 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e '.[test]' build
       - run: python -m pytest -q tests motor_controller_beta_v2/tests
-      - run: for script in tools/*.sh; do bash -n "$script"; done
+      - run: for script in Recover_can tools/*.sh; do bash -n "$script"; done
       - run: python -m build

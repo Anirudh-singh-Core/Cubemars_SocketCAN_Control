@@ -17,7 +17,3 @@ recordings/
 htmlcov/
 .mypy_cache/
 .ruff_cache/
-
-diagnostic_logs/
-encoder_records/
-.graph_logger.lock
