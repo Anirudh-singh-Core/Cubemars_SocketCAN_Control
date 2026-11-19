@@ -20,7 +20,7 @@ kernel's `mcp2515`/`mcp251xfd` overlays. This repository deliberately does not
 invent wiring or write a universal overlay. Reboot only if the hardware/overlay
 installation requires it. Normal controller startup needs no reboot.
 
-Never run `setup_jetson_can.sh` on a Pi. It is guarded for a specific Orin Nano
+Never pass `--jetson-orin-nano` to `setup_socketcan.sh` on a Pi. It is guarded for a specific Orin Nano
 pinmux. Use the generic setup below after your Pi adapter appears as `can0`.
 
 ## Install from the repository root

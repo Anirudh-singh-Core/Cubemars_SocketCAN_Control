@@ -4,7 +4,10 @@ flowchart TB
         SESSION["Session<br/>Exclusive operation modes and per-motor state"]
         STREAM["JointTarget group streaming<br/>Latest pending sample + command watchdog"]
         CONFIG["Motor configuration and limits"]
-        WORKER["One I/O worker<br/>Deadlines, receive, decode, validate, transmit"]
+        WORKER["TX worker<br/>Monotonic schedule, validate, transmit"]
+        RX["RX worker<br/>Capture frames without session lock"]
+        TIMING["TimingPolicy<br/>Explicit adjustable host defaults"]
+        PIPELINE["Per-motor exchange pipeline<br/>Sequential startup; normal TX confirmation only"]
         TRANSPORT["python-can Bus<br/>Persistent SocketCAN transport + channel lease"]
         DIAG["CAN Test<br/>Baseline / enable / polling / disable phases"]
         FILTER["Explicit filtered-feedback selection<br/>Independent state per motor"]
@@ -20,7 +23,12 @@ flowchart TB
     CONFIG --> SESSION
     SESSION --> WORKER
     DIAG -->|"borrows existing session"| SESSION
-    WORKER --> TRANSPORT
+    WORKER --> PIPELINE
+    PIPELINE --> TRANSPORT
+    TRANSPORT -->|"TX confirmations / feedback"| RX
+    RX --> INBOX["Bounded inbox + empty-socket checkpoint"]
+    INBOX --> WORKER
+    TIMING --> SESSION
     WORKER --> PROTOCOL
     TRANSPORT <--> CAN
     WORKER --> FILTER

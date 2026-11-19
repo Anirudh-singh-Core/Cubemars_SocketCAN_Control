@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Portable repository entry point; implementation stays in tools/.
+set -euo pipefail
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+exec bash "$repo_dir/tools/recover_can_desktop.sh" "$@"

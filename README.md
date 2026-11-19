@@ -1,8 +1,42 @@
-# MIT_SocketCAN
+# HandyCAN
 
-A small, hardware-only controller library for **CubeMars AK70-10 V2 KV100 in MIT
-mode**, using `python-can` and Linux SocketCAN at **1 Mbps**. This repository contains the controller library, CLI, offline tests and setup
-guides. A browser GUI is not required or included.
+A Linux controller for **CubeMars AK70-10 V2 and AK80-6 V2 in MIT mode**, using
+**python-can + Linux SocketCAN, classic CAN at 1 Mbps**.
+
+**Communication: sequential verified startup, then asynchronous transmit/receive.**
+One persistent SocketCAN socket is shared by a TX scheduling thread and a sole RX
+thread. This is threaded asynchronous I/O, not an asyncio API. Normal commands do
+not wait for each motor reply; per-motor feedback freshness and driver TX
+confirmations are supervised independently. CAN frames still serialize on the bus.
+Python/Linux timing is best effort; a configured 1000 Hz is not a guarantee.
+
+```mermaid
+flowchart TD
+  subgraph CORE["Controller library"]
+    API["Application / CLI / optional GUI"] --> SESSION["Session: limits, state, scheduling"]
+    SESSION --> TX["TX worker"]
+    RX["RX capture worker"] --> INBOX["Bounded inbox: confirmations first"]
+    INBOX --> SESSION
+    TX --> SOCKET["One python-can / SocketCAN socket"]
+    SOCKET --> RX
+  end
+  SOCKET <--> LINUX["Linux CAN driver: mttcan or adapter driver"]
+  LINUX <--> BUS["Controller + transceiver + CAN bus + motors"]
+  style CORE fill:#fff3b0,stroke:#b8860b
+```
+
+## Start here
+
+- [Jetson Orin Nano setup and recovery](docs/jetson.md), including `./Recover_can`.
+- [Raspberry Pi 5 setup](docs/raspberry-pi-5.md).
+- [Configuration examples and units](examples/README.md).
+- [Every controller source file: purpose, edit points, and verification](src/handycan/README.md).
+- [Setup/recovery scripts](tools/README.md) and [offline tests](tests/README.md).
+- [Validation and known limitations](VALIDATION.md).
+
+`main` contains the controller and continuous target streaming API.
+The [`gui-without-continuous-api` branch](https://github.com/Anirudh-singh-Core/Cubemars_SocketCAN_Control/tree/gui-without-continuous-api)
+adds the browser GUI; its UI does not expose continuous target streaming.
 
 No GUI, simulator runtime, automatic filter selection, shell startup hooks,
 background boot installation, implicit motor enable, or automatic reconnect.
@@ -16,8 +50,10 @@ sends nothing. Hardware activation always requires an explicit API call or
 | --- | --- |
 | `interface.py` | Read-only interface status and readiness checks |
 | `transport.py` | Cooperative channel lease and persistent `python-can.Bus` |
+| `receive.py` | Bounded RX handoff and socket-drain checkpoints; no session lock in capture |
+| `pipeline.py` | Per-ID exchanges, serialized startup, TX confirmation, bounded disable transitions |
 | `protocol.py` | Pure MIT encoding/decoding, including feedback identity checks |
-| `session.py` | One I/O worker, transmission schedule, motor states, stop/health supervision |
+| `session.py` | Separate TX/RX workers, transmission schedule, motor states, stop/health supervision |
 | `limits.py`, `motion.py` | Caller-defined limits and elapsed-time quintic profiles |
 | `streaming.py` | Immutable degree-based joint target samples for external planners |
 | `diagnostics.py` | CAN test through the existing session, with per-phase error evidence |
@@ -25,11 +61,11 @@ sends nothing. Hardware activation always requires an explicit API call or
 | `journal.py` | Bounded asynchronous JSONL history; disk I/O outside the CAN worker |
 | `cli.py` | Explicit status, test, and monitoring commands |
 
-One receiver reads the bus. The same worker sends all motor commands and routes
-feedback by CAN ID. CAN Test borrows the session; it never opens a second bus.
+One RX worker reads the bus and routes feedback by CAN ID. A separate TX worker
+schedules all motor commands on that same socket. CAN Test borrows the session; it never opens a second bus.
 An operation lock excludes diagnostics from public enable/move/zero operations.
 Stop bypasses that lock and the normal command queue. No `Notifier` is used:
-the worker is the sole `recv()` consumer, preventing competing readers.
+the RX worker is the sole receive consumer, preventing competing readers.
 
 A same-user channel lock is acquired once per session, at
 `~/.cache/handyflie/can0.lock`, compatible with the previous beta's lock. It is
@@ -52,39 +88,32 @@ or system Python replacement is installed.
 
 For Raspberry Pi 5, follow the [hardware and setup guide](docs/raspberry-pi-5.md).
 An existing physical SocketCAN interface on either board can be configured with
-`sudo bash tools/setup_socketcan.sh --confirm-stopped can0`. This does not install
+`sudo bash tools/setup_socketcan.sh --confirm-stopped can0`. Without the Jetson flag, this does not install
 a hardware driver or change pinmux.
-
-## Remove the previous boot configuration (once)
-
-Stop motor programs and secure the mechanism. Review and run:
-
-```bash
-sudo bash tools/remove_legacy_startup.sh --confirm-stopped
-```
-
-This removes only the recognized `jetson-can0.service` and
-`/etc/modules-load.d/jetson-can.conf`. Stopping the service brings can0 down.
-It does not uninstall kernel drivers or edit unrelated shell configuration.
-The old user-owned `~/.local/bin/can` helper was backed up and removed during
-migration. No CAN entries were found in the inspected shell startup files.
-
-Only use this migration helper if you previously installed that exact legacy
-service. The Python package itself does not install or enable a service.
 
 ## Explicit CAN setup after boot
 
 For the verified **Jetson Orin Nano / J17** wiring in this project only:
 
 ```bash
-sudo bash tools/setup_jetson_can.sh --confirm-stopped
+sudo bash tools/setup_socketcan.sh --confirm-stopped --jetson-orin-nano can0
 ```
 
 This checks the board model, acquires the channel lease, loads the modules,
 configures the known pin registers, and brings can0 up at 1 Mbps. No motor frame
-is sent. It is manual and idempotent; never run it during control. Other boards
-need their own validated pinmux configuration. BUS-OFF recovery is also explicit;
-no automatic motor resume is implemented. Opening a terminal does not run setup.
+is sent. It is manual; never run it during control. A healthy interface already matching
+these settings is left untouched. Setup explicitly disables loopback, listen-only,
+one-shot, CAN FD, and automatic bus-off restart, and enables error reporting.
+Normal setup does not reload the driver or reset an unhealthy controller. Other boards
+need their own validated pinmux configuration. Opening a terminal does not run setup.
+
+Configure **all motors before Connect**. Connect opens one socket for the entire
+configuration without sending frames; enabling motor 1 first is unnecessary.
+To change the motor list, disable/disconnect, edit/apply configuration, and connect
+again. That replaces only the Session/socket; it does not reinitialize Linux CAN.
+A fault stops control and remains visible. Do not make a bus reset or first-motor
+priming sequence part of ordinary startup. The physical cause of the intermittent
+multi-motor bit errors has not been established by offline tests.
 
 ## Status, communication test, monitor
 
@@ -128,13 +157,13 @@ optional current estimates with a caller-verified output torque constant.
 | --- | --- |
 | `Session(motors, channel='can0', control_hz=1000)` | Construct only; no hardware or worker startup |
 | `open()` / context manager | Validate, lease, open one bus, start worker and read-only health monitor |
-| `enable(id)` | Stage neutral command, submit FC, await feedback in worker; return indicates submission only |
+| `enable(id)` | Wait for serialized neutral/FC/probe startup; success requires TX confirmations and fresh probe feedback, not proof of torque activation |
 | `wait_for_feedback(id, timeout=1)` | Wait for fresh feedback without additional transmissions |
 | `get_encoder_feedback(id, source='raw')` | Fresh timestamped feedback in degrees; raises if stale/missing/faulted |
 | `move(id, target_deg, duration, kp=..., kd=..., ff_torque=...)` | Validate raw start/path, execute quintic, hold final target |
 | `go_zero(id, duration, kp=..., kd=...)` | Direct signed quintic recovery to absolute zero, even from outside joint limits, then hold |
 | `set_zero(id, confirm=True)` | Requires disabled motor; submit FE, clear feedback and filters; retain numeric limits relative to new zero |
-| `disable(id)` | Submit FD; no claim of motor execution confirmation |
+| `disable(id)` | Stop polling, drain outstanding exchange within a deadline, transmit FD and await TX confirmation; no claim of motor execution confirmation |
 | `stop()` | Cancel queued commands and attempt FD for active motors |
 | `snapshot()` | States, feedback ages, fault, timing and logging counters |
 | `can_test(session, id, active=False)` | Exclusive observation or explicit neutral polling test through this session |
@@ -193,7 +222,7 @@ No filter winners or performance conclusions are generated.
   is never reported as a confirmed disabled motor.
 - Transient CAN error frames are logged; the independent interface inspector
   checks every 0.5 s with a bounded subprocess timeout. CAN Test fails on new
-  errors even if valid motor replies continue.
+  errors immediately in the receiver, even if valid motor replies continue.
 - Faults require closing the session, resolving the cause and explicitly opening
   another session; there is no automatic reconnect or replay of motor commands.
 - There is no browser heartbeat. Motor feedback supervision is always active.
@@ -205,10 +234,90 @@ No filter winners or performance conclusions are generated.
 - Logging is bounded (20,000 queued events by default); overload increments a
   visible dropped counter instead of blocking control. Disk failures are exposed
   in `snapshot()['logging']`. Unlimited lossless history is not promised.
-- `1000 Hz` is a **best-effort target**, not hard real time. Timing statistics
-  describe software scheduling/submission, not independently measured wire timing.
-  CAN arbitration, hardware errors, OS scheduling and Python runtime still matter.
-- Aggregate requested traffic is checked against a conservative 80% budget.
+
+## Sequential startup, asynchronous operation
+
+GUI Enable, CLI monitoring and CAN Test share the Session pipeline. `enable()`
+waits for sequential neutral / FC / feedback-probe verification. The receiver
+continues processing all motors throughout startup. Normal polling starts only
+when that motor is ready, at least one full control period after the probe.
+Startup is serialized across IDs; coordinated streaming requires every selected
+motor to be ready. Solo control remains supported.
+
+One TX worker schedules commands; one independent RX worker reads the same
+python-can socket and captures frames into a bounded inbox without taking the
+session state lock. The TX/state worker consumes confirmations first, then decodes
+and publishes feedback under that lock. Normal control does NOT wait for a response to each command. Freshness is
+supervised independently per motor. Threads share Python runtime/CPU resources;
+this is best-effort timing, not a hard real-time guarantee.
+
+There is at most one unconfirmed transmission per ID to bound kernel backlog.
+Own driver TX confirmation releases that slot without waiting for motor feedback.
+Other IDs continue independently. Each tick evaluates current trajectory targets;
+TX-full drops that unsent sample and the next tick recomputes the current target.
+There is no fatal two-period unsent-control age deadline, retry FIFO, catch-up
+burst, or automatic CAN reset. Actual send errors and sustained feedback loss
+remain faults. Special startup/zero/disable commands retain bounded retry and
+response handling because they are ordered operations, not replaceable samples.
+
+Streaming preflights the complete target group before sending. Individual IDs
+can defer when their TX slot is occupied or the kernel queue is busy; other IDs
+can still submit. `stream_partial_submission` records these partial cycles.
+`stream_applied` advances only when every group member was submitted in one cycle;
+it does not prove synchronous wire delivery or motor execution. There is no
+per-feedback group barrier. Holding uses the last completely submitted group;
+applications requiring hardware-synchronous actuation need a different protocol.
+
+The transport retains driver IFF_ECHO verification, MSG_CONFIRM identification,
+kernel timestamps, RX overflow detection, and detection of other local senders.
+Disable enters DISABLING, stops new periodic submissions, finishes/bounds the
+outstanding TX and optional special response window, then attempts FD. FD
+confirmation is a transmission result, never proof that physical torque is off.
+Set Zero enters ZEROING and clears calibration; its settle window remains an
+unvalidated host policy. Already submitted kernel packets cannot be recalled.
+
+## Adjustable timing policies (seconds in Python/JSON)
+
+**All defaults below are host policy choices, not measured or manufacturer-certified
+limits for this Jetson/firmware.** They retain the preceding implementation's
+values except that the fatal unsent-control packet deadline was removed.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `TimingPolicy.tx_confirmation_timeout_s` | 0.010 s (10 ms) | Missing/late driver TX confirmation faults the session |
+| `special_tx_queue_timeout_s` | 0.010 s (10 ms) | Startup/zero/disable packet cannot be submitted; operation fails |
+| `special_response_window_s` | 0.010 s (10 ms) | Optional reply/settle window after neutral, FC, FD or FE; not a motor ACK |
+| `startup_feedback_timeout_s` | 1 s | Fresh feedback required for the startup probe |
+| `scheduler_stall_s` | 0.050 s | Fault above max(this setting, 3 control periods) of scheduler lateness |
+| `health_check_interval_s` | 0.500 s | Read-only interface inspection interval; not a per-frame deadline |
+| `diagnostic_feedback_gap_s` | 0.100 s | CAN Test maximum allowed feedback gap, including phase edges |
+| `rx_poll_interval_s` | 0.005 s | Maximum idle socket wait; arriving data wakes it immediately |
+| `shutdown_timeout_s` | 0.250 s | Bounded shutdown drain before socket closure |
+| `api_timeout_s` | 2 s | Caller wait for an operation; expiry requests Stop |
+| `Motor.from_degrees(feedback_timeout=...)` | 0.100 s | Maximum feedback age for that motor; stale active feedback faults the session |
+| `start_stream(timeout=..., timeout_action=...)` | Caller required | Higher-level command-age watchdog; explicit hold/disable choice |
+
+The GUI exposes TimingPolicy under **Initialize → Communication timing**, in
+milliseconds. Each motor row exposes **Feedback-loss timeout**, in seconds.
+Disconnect, edit, Apply configuration, then Connect. The Python API accepts
+`Session(..., timing=TimingPolicy(...))`; CLI JSON accepts an optional top-level
+`timing` object with those field names. Changing class defaults requires a process
+restart; GUI configuration changes take effect on the next connection. Unknown,
+nonfinite/nonpositive settings and contradictory startup/API or shutdown budgets
+are rejected. Effective policies are included in snapshots, session logs and test
+reports. No watchdog silently adapts itself.
+
+Additional housekeeping intervals are not motor-loss policies: the interface `ip`
+subprocess has a 1 s timeout, health-thread join 2 s, logger join 3 s, and worker
+joins allow the configured shutdown/RX wait plus 1 s. Diagnostic polling sleeps
+up to 5 ms; a test phase defaults to 1 s. `wait_for_feedback(timeout=...)` is an
+explicit caller wait (default 1 s). The stream timeout currently must be between
+two control periods and 1 s, an existing API constraint, not a firmware guarantee.
+
+The optional-response window cannot uniquely associate late MIT replies with
+commands because the protocol has no transaction counter. Clock conversion
+assumes stable host wall time. Evaluate these policies on the actual mechanism;
+raising a timeout allows a longer period without confirmed communication.
 
 ## Tests
 
@@ -304,8 +413,9 @@ cannot be changed midstream; end it and explicitly start another group.
   samples or implement interpolation upstream.
 - Group commands share a software control cycle, but classic CAN transmits frames
   sequentially. This is not simultaneous motor execution, and there is no motor
-  execution acknowledgement. A transport failure can occur after only part of
-  the group was sent; the session faults and attempts disable.
+  execution acknowledgement. A non-retryable transport failure can occur after only part of
+  the group was sent; the session faults and attempts disable. Temporary TX-full
+  skips that motor for the current cycle and logs partial submission.
 - Acceptance returns `execution_verified=False`. `snapshot()['stream']` exposes
   accepted/applied sequences, replaced updates and command age. Applied means all
   frames were submitted to python-can, not independently verified on the wire.
@@ -361,3 +471,83 @@ can still stop recovery. The generated position targets progress toward zero
 and hold at arrival; this cannot guarantee physical direction against external
 forces or momentum. Recovery does not start while another trajectory or stream
 is running. Measured out-of-range position alone remains a warning.
+
+
+### Mixed AK70-10 / AK80-6 V2 motors and all-motor diagnostics
+
+Set `model="AK70-10-V2"` or `model="AK80-6-V2"` in each
+`Motor.from_degrees(...)` call (or each JSON motor row). Existing configurations
+without this field retain AK70-10 V2 behavior. Select the model separately in the
+beta V2 GUI: for the current rig, ID 1 is AK70-10 V2, IDs 2 and 3 are AK80-6 V2.
+A model is explicitly configured, not discovered from the CAN ID.
+
+The [CubeMars AK 2.0 manual v1.0.18, section 5.3, page 63](https://www.cubemars.com/data/cms/202602/ak-series-driver-manual-v1-0-18-for-ak-2-0-robotic-actuator.pdf)
+specifies AK70-10 velocity/torque encoding spans of ±50 rad/s / ±25 Nm and
+AK80-6 spans of ±76 rad/s / ±12 Nm. These are wire encoding ranges, not safe
+operating recommendations. Caller-supplied limits remain mandatory and must fit
+the selected profile. Positions, gain ranges, and special commands are shared.
+The profile applies to command encoding, quantized checks, and feedback decoding,
+including quintic holds and the streaming API. Older recorded AK80-6 velocity
+and torque values decoded with the AK70-10 profile must not be treated as calibrated.
+
+`can_test(session, active=True)` now tests every configured ID individually,
+then polls all IDs together at the session's configured rate. Passing one ID
+cannot produce an overall PASS for a multi-motor configuration. Reports include
+per-ID reply counts/rates/gaps, phase errors, overall error-counter changes, and
+configured model names. The GUI always tests all configured IDs; CLI `test`
+without `--id` does the same. An explicit `--id` or function `motor_id` retains
+the single-motor test. Active tests require all motors disabled initially, use
+zero-gain monitoring only, and attempt disable after each stage and on failure.
+Support every joint; monitoring releases holding and has quantization residuals.
+Stop All cancels the test. No new bus/socket, trajectory, or hold command is used.
+
+A PASS only covers the observed interval and tested neutral traffic. It does not
+certify motion, loaded holding, wiring integrity in every position, or future
+link health. The controller still faults and attempts disable on unhealthy CAN
+state, including ERROR-WARNING; reconnect does not reset Linux's CAN controller.
+
+
+### Explicit Jetson CAN recovery without reboot
+
+With joints supported, motors stopped/disabled, and all controllers disconnected:
+
+```bash
+sudo bash tools/setup_socketcan.sh --confirm-stopped --jetson-orin-nano --recover-driver can0
+```
+
+This explicit option acquires the same channel lease as Session, refuses other
+mttcan-bound controllers/interfaces, brings can0 down, unloads/reloads mttcan once,
+then uses the existing setup path to restore J17 pins and normal classic CAN at
+1 Mbps. It verifies ERROR-ACTIVE, zero reported error counters, and restart-ms 0.
+It never enables, disables, or resumes a motor. Stop/secure motors before using it;
+resetting CAN cannot itself ensure a powered motor is stopped. The lease protects
+cooperating processes under the same user; stop external CAN senders too.
+
+`bash tools/recover_can_desktop.sh` provides the interactive terminal launcher.
+On this Jetson, the desktop **Recover CAN** shortcut opens it. Confirm readiness
+with `RECOVER` and enter your normal sudo password if requested. No sudoers change,
+boot service, background retry, or GUI auto-reconnect is installed. Normal setup
+without `--recover-driver` retains its existing behavior. Driver reload can clear
+retained host CAN state without a full reboot, but does not reset motor firmware
+or prove that the underlying bus error cause is fixed. If recovery verification
+fails, it reports failure and does not retry or start control.
+
+The recovery shell workflow is checked offline with mocked commands/sysfs for
+success, owned channels, other bound controllers, unload failure, unhealthy final
+state, and explicit-option validation. This is not a live hardware recovery test.
+
+## TX confirmation processing
+
+The RX reader drains the socket and publishes an empty-socket checkpoint together
+with queued frames. Before declaring a missing TX confirmation, the controller
+consumes priority frames and requires a checkpoint past that TX deadline. A kernel
+timestamp inside the deadline remains valid when Python processing is delayed.
+A genuinely late kernel timestamp still fails. If RX cannot supply a checkpoint,
+the existing `max(scheduler_stall_s, 3/control_hz)` budget after the TX deadline
+bounds that wait and reports `RX processing stalled`. No timeout default was raised.
+
+The inbox holds at most 4096 frames; overflow faults explicitly. Each state-worker
+pass handles all priority frames and up to 64 ordinary feedback frames. JSONL
+`tx_confirmed` records separate `kernel_tx_delay_s`, `rx_capture_delay_s`, and
+`rx_dispatch_delay_s`; these distinguish transmission delay from host processing.
+The logger remains a bounded background writer thread, not a separate process.

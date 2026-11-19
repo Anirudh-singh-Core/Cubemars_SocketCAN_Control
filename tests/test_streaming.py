@@ -77,6 +77,7 @@ def test_timeout_disable_faults_and_cannot_be_revived(session):
     state=wait(session,lambda x:x['fault'] is not None)
     assert 'Streaming command deadline' in state['fault']
     assert state['stream'] is None
+    state=wait(session,lambda x:all(a['state']=='DISABLED' for a in x['axes'].values()))
     assert all(a['state']=='DISABLED' for a in state['axes'].values())
     with pytest.raises(SessionFault):session.stream_targets(token,targets(),sequence=1)
     assert {i for i,p,_ in session._transport.sent if p==DISABLE}=={1,2}
@@ -113,6 +114,7 @@ def test_feedback_failure_overrides_hold_policy(session):
     session._transport.reply=False
     state=wait(session,lambda x:x['fault'] is not None)
     assert 'stale' in state['fault'].lower()
+    state=wait(session,lambda x:all(a['state']=='DISABLED' for a in x['axes'].values()))
     assert all(a['state']=='DISABLED' for a in state['axes'].values())
 
 def test_group_preflight_sends_nothing_when_later_member_invalid(session):
