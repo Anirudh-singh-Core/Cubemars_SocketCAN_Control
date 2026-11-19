@@ -1,5 +1,9 @@
 # HandyCAN
 
+**Experimental / beta motor-control software.** Read [hardware safety](SAFETY.md),
+[contribution instructions](CONTRIBUTING.md), and [security reporting](SECURITY.md).
+Licensed under [MIT](LICENSE); dependency licenses remain separate.
+
 A Linux controller for **CubeMars AK70-10 V2 and AK80-6 V2 in MIT mode**, using
 **python-can + Linux SocketCAN, classic CAN at 1 Mbps**.
 
@@ -337,8 +341,9 @@ project's existing working files; the new communication and orchestration layer
 is independent of the legacy code. See the official
 [python-can SocketCAN backend](https://python-can.readthedocs.io/en/stable/interfaces/socketcan.html)
 and [Linux SocketCAN documentation](https://docs.kernel.org/networking/can.html).
-No external robotics driver code was copied. No open-source license has been selected yet; publication alone does not grant
-reuse rights. Choose a license and review ownership before an open-source release.
+This project is licensed under [MIT](LICENSE). Dependencies and external
+documentation retain their own licenses. The available source contains no
+identified vendored robotics driver; provenance review is not a legal ownership audit.
 
 
 ## Continuous joint-target streaming (IK / outer controllers)

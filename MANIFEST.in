@@ -4,3 +4,5 @@ recursive-include examples *.json *.md
 recursive-include tools *.sh *.md
 recursive-include tests *.py *.md
 recursive-include src *.md
+
+include LICENSE CONTRIBUTING.md SECURITY.md SAFETY.md
